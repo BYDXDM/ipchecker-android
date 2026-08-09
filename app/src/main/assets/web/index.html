@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IP 侦探 · IP 全维度检测</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-logo">🛰️</span>
+      <span class="brand-name">IP DETECTOR</span>
+    </div>
+    <button id="btnRefresh" class="btn-refresh" title="重新检测">
+      <span class="spin-ico">⟳</span> 重新检测
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ IP 主展示 + 纯净度 ============ -->
+  <section class="hero card">
+    <div class="hero-ip-row">
+      <span class="hero-label">我的公网 IP 地址</span>
+      <button id="btnCopy" class="copy-btn" title="复制 IP">📋</button>
+    </div>
+    <div id="heroIp" class="hero-ip">--</div>
+    <div id="heroSub" class="hero-sub">正在检测…</div>
+
+    <!-- 醒目的纯净度一览（放公网 IP 正下方） -->
+    <div class="hero-purity" id="heroPurity">
+      <div class="hp-badge" id="hpBadge">IP 纯净度</div>
+      <div class="hp-ring">
+        <svg viewBox="0 0 64 64" class="hp-svg">
+          <circle cx="32" cy="32" r="27" class="hp-ring-bg"/>
+          <circle id="hpRingFg" cx="32" cy="32" r="27" class="hp-ring-fg"/>
+        </svg>
+        <span id="hpScore" class="hp-num">--</span>
+      </div>
+      <div class="hp-meta">
+        <div class="hp-label">IP 纯净度</div>
+        <div id="hpLevel" class="hp-level">检测中</div>
+        <div id="hpDesc" class="hp-desc">--</div>
+      </div>
+    </div>
+
+    <div class="flag-large" id="flagLarge">🌐</div>
+  </section>
+
+  <!-- ============ 加载遮罩 ============ -->
+  <div id="loading" class="loading hidden">
+    <div class="spinner"></div>
+    <div id="loadingText">正在检测 IP 归属地…</div>
+  </div>
+
+  <!-- ============ IPv4 / IPv6 切换 ============ -->
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-type="v4">IPv4 · <span id="ipv4Val">--</span></button>
+    <button class="tab" data-type="v6">IPv6 · <span id="ipv6Val">--</span></button>
+  </nav>
+
+  <!-- ============ 基本信息 ============ -->
+  <section class="card" id="infoCard">
+    <h2 class="card-title">📍 IP 基本信息</h2>
+    <div class="grid info-grid">
+      <div class="kv"><span>P地址 / Address</span><b id="i_ip">--</b></div>
+      <div class="kv"><span>版本 / Version</span><b id="i_ver">--</b></div>
+      <div class="kv"><span>ASN 编号</span><b id="i_asn">--</b></div>
+      <div class="kv"><span>ISP 运营商</span><b id="i_isp">--</b></div>
+      <div class="kv"><span>归属组织</span><b id="i_org">--</b></div>
+      <div class="kv"><span>国家 / Country</span><b id="i_country">--</b></div>
+      <div class="kv"><span>省级 / Region</span><b id="i_region">--</b></div>
+      <div class="kv"><span>城市 / City</span><b id="i_city">--</b></div>
+      <div class="kv"><span>半球定位</span><b id="i_loc">--</b></div>
+      <div class="kv"><span>时区 / TZ</span><b id="i_tz">--</b></div>
+      <div class="kv"><span>代换码</span><b id="i_call">--</b></div>
+      <div class="kv"><span>欧盟?</span><b id="i_eu">--</b></div>
+    </div>
+  </section>
+
+  <!-- ============ 时区时钟 ============ -->
+  <section class="card" id="clockCard">
+    <h2 class="card-title">🕐 IP 所在时区时间</h2>
+    <div class="clock-row">
+      <span id="clockTime" class="clock-time">--:--:--</span>
+      <span id="clockTz" class="clock-tz">--</span>
+      <span id="clockUtc" class="clock-utc">UTC --</span>
+    </div>
+  </section>
+
+  <!-- ============ 归属地图 ============ -->
+  <section class="card" id="mapCard">
+    <div class="card-head-row">
+      <h2 class="card-title">🗺️ 归属地点</h2>
+      <span class="map-coords" id="mapCoords">--</span>
+    </div>
+    <div class="map-tabs">
+      <button class="mtab active" data-src="osm">OpenStreetMap</button>
+      <button class="mtab" data-src="amt">高德</button>
+      <button class="mtab" data-src="gdi">国家天地图</button>
+    </div>
+    <div id="mapWrap" class="map-wrap">
+      <iframe id="mapFrame" class="map-frame" loading="lazy"></iframe>
+    </div>
+  </section>
+
+  <!-- ============ 纯净度评分 ============ -->
+  <section class="card" id="pureCard">
+    <h2 class="card-title">🛡️ IP 纯净度 & 风控评分</h2>
+    <div class="score-row">
+      <div class="score-ring-wrap">
+        <svg viewBox="0 0 120 120" class="score-ring">
+          <circle cx="60" cy="60" r="52" class="ring-bg"/>
+          <circle id="ringFg" cx="60" cy="60" r="52" class="ring-fg"/>
+        </svg>
+        <div class="score-num-wrap">
+          <b id="scoreNum" class="score-num">--</b>
+          <span class="score-label">纯净度</span>
+        </div>
+      </div>
+      <div class="score-side">
+        <div class="score-level" id="scoreLevel">检测中</div>
+        <div class="score-desc" id="scoreDesc">--</div>
+      </div>
+    </div>
+    <div class="metrics" id="metrics">
+      <!-- 动态渲染指标 -->
+    </div>
+  </section>
+
+  <!-- ============ 人机流量对比 ============ -->
+  <section class="card" id="trafficCard">
+    <h2 class="card-title">🤖 人 vs 机 流量构成对比</h2>
+    <p class="hint">根据当前 IP 的行为特征与信誉库估算的流量占比（模拟评估）。</p>
+    <div class="stacked-bar">
+      <div class="bar-human" id="barHuman"></div>
+      <div class="bar-bot" id="barBot"></div>
+      <div class="bar-abuse" id="barAbuse"></div>
+    </div>
+    <div class="legend">
+      <span class="lg"><i class="dot d-human"></i> 真人流量</span>
+      <span class="lg"><i class="dot d-bot"></i> 机器人/爬虫</span>
+      <span class="lg"><i class="dot d-abuse"></i> 恶意流量</span>
+    </div>
+    <div class="traffic-cols">
+      <div class="tcol">
+        <b id="tHuman" class="tval c-human">--</b>
+        <span>真人占比</span>
+      </div>
+      <div class="tcol">
+        <b id="tBot" class="tval c-bot">--</b>
+        <span>机器人占比</span>
+      </div>
+      <div class="tcol">
+        <b id="tAbuse" class="tval c-abuse">--</b>
+        <span>恶意占比</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WebRTC 泄露 ============ -->
+  <section class="card" id="webrtcCard">
+    <div class="card-head-row">
+      <h2 class="card-title">🕸️ WebRTC 真实 IP 泄露检测</h2>
+      <span id="webrtcBadge" class="badge badge-wait">未检测</span>
+    </div>
+    <p class="hint">WebRTC 可通过 STUN 服务器绕过 VPN/代理探测到你的真实 IP。点击下方按钮进行检测。</p>
+    <div class="webrtc-info" id="webrtcInfo">
+      <p class="muted">尚未检测，点击按钮开始。</p>
+    </div>
+    <div class="webrtc-results" id="webrtcResults"></div>
+    <button id="btnWebrtc" class="action-btn">▶ 开始 WebRTC 检测</button>
+  </section>
+
+  <!-- ============ DNS 泄露 ============ -->
+  <section class="card" id="dnsCard">
+    <div class="card-head-row">
+      <h2 class="card-title">🔍 DNS 泄露检测</h2>
+      <span id="dnsBadge" class="badge badge-wait">未检测</span>
+    </div>
+    <p class="hint">检测你的 DNS 请求是否被泄露给第三方（如 ISP），泄漏会导致隐私暴露。点击按钮执行 3 轮 DNS 探测。</p>
+    <div class="dns-list" id="dnsList"></div>
+    <button id="btnDns" class="action-btn">▶ 开始 DNS 检测</button>
+  </section>
+
+  <footer class="foot">
+    <span>IP 侦探 · 数据来源 ipwho.is / ip.sb · 仅供技术参考</span>
+  </footer>
+
+</main>
+
+<script src="app.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+# Gradle
+.gradle/
+build/
+app/build/
+
+# 本地 keystore 属性（不提交）
+keystore.properties
+
+# 临时
+.DS_Store
+make_icon.py
