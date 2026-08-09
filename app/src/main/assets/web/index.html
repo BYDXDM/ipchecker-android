@@ -61,7 +61,18 @@
   <nav class="tabs" id="tabs">
     <button class="tab active" data-type="v4">IPv4 · <span id="ipv4Val">--</span></button>
     <button class="tab" data-type="v6">IPv6 · <span id="ipv6Val">--</span></button>
+    <button class="tab" data-type="quote">🔎 查任意 IP</button>
   </nav>
+
+  <!-- ============ 任意 IP 查询 ============ -->
+  <div id="quoteBox" class="card qbox hidden">
+    <h2 class="card-title">查询任意 IP 的纯净度</h2>
+    <div class="qrow">
+      <input id="qIpInput" class="qinput" type="text" placeholder="输入 IPv4/IPv6，如 8.8.8.8 或 114.114.114.114" />
+      <button id="btnLookup" class="action-btn qbtn">查询</button>
+    </div>
+    <p class="hint">输入要检测的 IP，实时返回它的归属地、纯净度、WebRTC 与 DNS 结论。查询他人 IP 时，WebRTC/DNS 结果仅针对你自己的设备。</p>
+  </div>
 
   <!-- ============ 基本信息 ============ -->
   <section class="card" id="infoCard">
@@ -193,6 +204,6 @@
 
 </main>
 
-<script src="app.js?v=6"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

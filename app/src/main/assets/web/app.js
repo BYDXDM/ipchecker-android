@@ -8,13 +8,14 @@ const $ = (id) => document.getElementById(id);
 /* ---------------- 当前状态 ---------------- */
 const state = {
   ip: null,        // 当前展示的IP
-  ipType: 'v4',    // v4 / v6
+  ipType: 'v4',    // v4 / v6 / quote
   v4: null,
   v6: null,
   info: null,
   pureData: null,
   mapLat: 0,
   mapLon: 0,
+  isOwn: true,
 };
 
 /* ---------------- 工具 ---------------- */
@@ -52,125 +53,164 @@ async function getMyIPs() {
 
 /* ---------------- IP 归属全量信息 ---------------- */
 async function getInfo(ip) {
-  // ipwho.is 为主
-  let who = null, sb = null;
+  // ipwho.is 为主, ip.sb 兜底, ip-api.com 补充 proxy/hosting/精确org
+  let who = null, sb = null, api = null;
   try { who = await fetch('https://ipwho.is/' + encodeURIComponent(ip)).then(r=>r.json()); } catch(e){}
   try { sb = await fetch('https://api.ip.sb/geoip/' + encodeURIComponent(ip), {headers:{'User-Agent':'curl/7.8'}}).then(r=>r.json()).catch(()=>null); } catch(e){}
+  try {
+    // ip-api.com 免费(非https), 提供 proxy/hosting/as/org —— 纯净度判定关键
+    api = await fetch('http://ip-api.com/json/' + encodeURIComponent(ip) +
+      '?fields=status,country,regionName,city,isp,org,as,proxy,hosting,mobile', {mode:'cors'}).then(r=>r.json()).catch(()=>null);
+    if (api && api.status!=='success') api = null;
+  } catch(e){ api = null; }
 
   const src = who && who.success ? who : (sb || null);
-  if (!src) return null;
+  if (!src && !api) return null;
 
   const isv6 = String(ip).includes(':');
-  const org = (who && who.connection) ? who.connection.org : (sb ? sb.organization : '');
+  const owner = who && who.success ? who : {};
+  const conn = owner.connection || {};
+  const org = conn.org || (sb ? sb.organization : '') || (api ? api.org : '');
 
   return {
     ip, version: isv6 ? 'IPv6' : 'IPv4',
-    type: who ? (who.type || (isv6?'IPv6':'IPv4')) : (isv6?'IPv6':'IPv4'),
-    asn: (who && who.connection && who.connection.asn) || (sb ? sb.asn : '--'),
-    asn_org: (who && who.connection && who.connection.org) || (sb ? sb.asn_organization : '--'),
-    isp: (who && who.connection && who.connection.isp) || (sb ? sb.isp : '--'),
+    type: owner.type || (isv6?'IPv6':'IPv4'),
+    asn: conn.asn || (sb ? sb.asn : '--'),
+    asn_org: conn.org || (sb ? sb.asn_organization : '--'),
+    isp: conn.isp || (sb ? sb.isp : '--') || (api ? api.isp : '--'),
     org,
-    country: who ? who.country : sb.country,
-    country_code: who ? who.country_code : sb.country_code,
-    region: who ? who.region : sb.region,
-    region_code: who ? who.region_code : sb.region_code,
-    city: who ? who.city : sb.city,
-    lat: who ? who.latitude : sb.latitude,
-    lon: who ? who.longitude : sb.longitude,
-    postal: who ? who.postal : null,
-    calling_code: (who && who.calling_code) || '--',
-    flag_emoji: (who && who.flag) ? who.flag.emoji : null,
-    is_eu: who ? who.is_eu : false,
-    timezone: who ? (who.timezone ? who.timezone.id : (sb?sb.timezone:'--')) : (sb?sb.timezone:'--'),
-    tz_offset: who ? (who.timezone ? who.timezone.offset : null) : (sb ? sb.offset : null),
-    tz_utc: who ? (who.timezone ? who.timezone.utc : null) : null,
+    country: owner.country || (sb?sb.country:'') || (api?api.country:''),
+    country_code: owner.country_code || (sb?sb.country_code:'') || (api?api.country:''),
+    region: owner.region || (sb?sb.region:'') || (api?api.regionName:''),
+    region_code: owner.region_code || (sb?sb.region_code:'') || '',
+    city: owner.city || (sb?sb.city:'') || (api?api.city:''),
+    lat: owner.latitude !== undefined ? owner.latitude : (sb?sb.latitude:null),
+    lon: owner.longitude !== undefined ? owner.longitude : (sb?sb.longitude:null),
+    postal: owner.postal || null,
+    calling_code: owner.calling_code || '--',
+    flag_emoji: (owner.flag && owner.flag.emoji) || null,
+    is_eu: owner.is_eu === true,
+    timezone: owner.timezone ? owner.timezone.id : (sb?sb.timezone:'--'),
+    tz_offset: owner.timezone ? owner.timezone.offset : (sb?sb.offset:null),
+    tz_utc: owner.timezone ? owner.timezone.utc : null,
+    // 纯净度相关真实数据
+    api_proxy: api ? (api.proxy === true) : (isVpnish(org, isp)),
+    api_hosting: api ? (api.hosting === true) : isDcByKw(org, isp),
+    api_asn: api ? (api.as||'') : '',
   };
 }
 
-/* ---------------- 纯净度评分 ---------------- */
+/* ---- 纯净度辅助判断（无 ip-api 时的关键字兜底） ---- */
+const DC_KW = ['cloud','hosting','microsoft azure','amazon','amazon-02','digitalocean','linode','vultr','hetzner','oracle','aws','huawei','alibaba','tencent','softlayer','ovh','internet invest','cogent','akamai','kagoya','google','packet'];
+const VPN_KW = ['vpn','proxy','tor ','tor-','packet','nord','surfshark','privacy','relay','openvpn','wireguard','antler','hostkey','21vianet'];
+function isDcByKw(org, isp){ const o=(org||'').toLowerCase(), i=(isp||'').toLowerCase(); return DC_KW.some(k=>o.includes(k)||i.includes(k)); }
+function isVpnish(org, isp){ const o=(org||'').toLowerCase(), i=(isp||'').toLowerCase(); return VPN_KW.some(k=>o.includes(k)||i.includes(k)); }
+
+/* ---------------- 纯净度评分（真实数据源） ---------------- */
 async function getPurity(ip) {
-  // 使用多源启发式评分。免费无需key的源有限，这里综合 ipwho.is 的类型标注 + abuseIPDB 公开接口尝试。
   const metrics = [];
   let checks = [];
-
-  // 1. 类型判断
+  const info = state.info || {};
   const isv6 = String(ip).includes(':');
-  // 托管/数据中心判断：通过 ASN/org 关键字启发
-  const dcKeywords = ['cloud','hosting','microsoft azure','amazon','amazon-02','digitalocean','linode','vultr','hetzner','oracle','aws','huawei','alibaba','tencent','softlayer','ovh','internet invest','cogent','akamai','kagoya'];
-  const org = ((state.info && state.info.org)||'').toLowerCase();
-  const isp = ((state.info && state.info.isp)||'').toLowerCase();
-  const isDc = dcKeywords.some(k => org.includes(k) || isp.includes(k));
+  const org = (info.org||'').toLowerCase();
+  const isp = (info.isp||'').toLowerCase();
+  const asn = String(info.asn||'');
 
-  // 累计风控扣分，用于计算纯净度
-  let risk = 0;
+  // 真实判定：优先用 ip-api 的 proxy / hosting；拿不到则关键字兜底
+  const isProxy = info.api_proxy === true;
+  const isHosting = info.api_hosting === true;
+  const isCDN = /cloudflare|fastly|akamai|cloudfront/.test(org + ' ' + isp);
+  const hasLoc = !!(info.lat && info.lon && info.lat!==0 && info.lon!==0);
 
-  if (isDc) {
-    metrics.push({name:'托管商 / 数据中心', val:60, good:false, desc:'IP 属于云服务/托管商，常被用于代理与风控敏感场景。'});
+  const add = (name, risk, good, desc, extra) => {
+    metrics.push({name, val:risk, good, desc, extra:extra||{}});
+  };
+
+  // 1) 托管/数据中心（真实 hosting 字段）
+  if (isHosting) {
+    add('托管商 / 数据中心', 72, false, '该 IP 属于云服务/托管商（数据中心），常被用于代理与风控敏感场景。', {key:'hosting'});
     checks.push('数据中心');
-    risk += 60;
   } else {
-    metrics.push({name:'托管商 / 数据中心', val:8, good:true, desc:'属于家用/移动宽带接入，非托管商。'});
-    risk += 8;
+    add('托管商 / 数据中心', 6, true, '家用 / 移动 / 普通运营商接入，非托管商。', {key:'hosting'});
   }
 
-  // 2. 滥用信誉（启发式占位，无公开红点）
-  metrics.push({name:'滥用信誉库', val:10, good:true, desc:'未检测到公开滥用记录（启发式评估）。'});
-  risk += 10;
-
-  // 3. 代理 / VPN / TOR
-  if (isDc) {
-    metrics.push({name:'代理 / VPN / TOR', val:45, good:false, desc:'托管 IP 常被用作代理/VPN 出口，需留意。'});
-    risk += 45;
+  // 2) 代理 / VPN / TOR（真实 proxy 字段）
+  if (isProxy) {
+    add('代理 / VPN / TOR', 88, false, '检测到公开代理 / VPN 出口特征，风控风险很高。', {key:'proxy'});
+    checks.push('代理/VPN');
   } else {
-    metrics.push({name:'代理 / VPN / TOR', val:10, good:true, desc:'未见代理/VPN 出口特征。'});
-    risk += 10;
+    add('代理 / VPN / TOR', 8, true, '未见代理 / VPN / TOR 出口特征。', {key:'proxy'});
   }
 
-  // 4. 定位可信度（经纬度是否完整解析）
-  const hasLoc = state.info && state.info.lat && state.info.lon && state.info.lat!==0 && state.info.lon!==0;
-  if (hasLoc) {
-    metrics.push({name:'定位可信度', val:5, good:true, desc:'经纬度解析完整，归属地定位可靠。'});
-    risk += 5;
-  } else {
-    metrics.push({name:'定位可信度', val:40, good:false, desc:'经纬度缺失或不完整，归属地定位不可靠。'});
-    risk += 40;
-  }
-
-  // 5. CDN / 公共出口
-  const isCDN = org.includes('cloudflare') || isp.includes('cloudflare');
+  // 3) CDN / 公共出口（真实 org 判定）
   if (isCDN) {
-    metrics.push({name:'CDN / 公共出口', val:55, good:false, desc:'检测到 CDN 出口，非直连家用 IP。'});
-    risk += 55;
+    add('CDN / 公共出口', 62, false, '该 IP 是知名 CDN / 公共出口节点，非家庭直连。', {key:'cdn'});
+    checks.push('CDN');
   } else {
-    metrics.push({name:'CDN / 公共出口', val:8, good:true, desc:'非知名 CDN 出口。'});
-    risk += 8;
+    add('CDN / 公共出口', 9, true, '非知名 CDN 出口，属于普通接入。', {key:'cdn'});
   }
 
-  // 归一化: 每项先平均，再映射到纯净度
-  const avgRisk = (risk) / 5;
-  let score = Math.round(100 - avgRisk);
-  score = Math.max(5, Math.min(98, score));
+  // 4) 定位可信度
+  if (hasLoc) {
+    add('定位可信度', 7, true, '经纬度解析完整，归属地定位可靠。', {key:'loc'});
+  } else {
+    add('定位可信度', 42, false, '经纬度缺失或不完整，归属地定位不精确。', {key:'loc'});
+    checks.push('定位模糊');
+  }
+
+  // 5) ASN / 运营商信誉（真实 as 的启发）
+  const asIsSuspicious = /TOR|PROX|VPN|HOST|DATACENTER|CLOUD|IDC|CARGOHOST|HOSTKEY/.test(String(info.api_asn||'').toUpperCase());
+  if (asIsSuspicious) {
+    add('ASN 信誉', 55, false, 'AS 编号归属可疑网络（代理/托管/IDC 特征）。', {key:'asn'});
+    checks.push('可疑ASN');
+  } else {
+    add('ASN 信誉', 10, true, 'AS 番号无显著风控特征。', {key:'asn'});
+  }
+
+  // 归一化评分：风险取加权，避免"清一色92"
+  // 权重: 代理/VPN最高(0.30), 托管(0.22), CDN(0.16), 定位(0.12), ASN(0.20)
+  const weights = [0.22, 0.30, 0.16, 0.12, 0.20];
+  const vals = metrics.map(m=>m.val);
+  const total = vals.reduce((s,v,i)=> s + v*weights[i], 0);
+  let score = Math.round(100 - total);
+  score = Math.max(3, Math.min(98, score));
 
   let level, levelColor, desc;
   if (score >= 85) { level='🟢 优秀'; levelColor='var(--good)'; desc='IP 纯净度高，疑似家用/移动直连，风控风险低。'; }
-  else if (score >= 70) { level='🟡 良好'; levelColor='var(--mid)'; desc='IP 整体干净，可能存在少量公共出口特征。'; }
-  else if (score >= 50) { level='🟠 一般'; levelColor='var(--warn)'; desc='IP 存在一定风控信号（托管/共享出口），个别平台可能受限。'; }
-  else { level='🔴 高风险'; levelColor='var(--danger)'; desc='IP 纯净度低，疑似代理/数据中心，易被风控拦截。'; }
+  else if (score >= 70) { level='🟡 良好'; levelColor='var(--mid)'; desc='IP 大部分干净，可能存在公共出口特征。'; }
+  else if (score >= 50) { level='🟠 一般'; levelColor='var(--warn)'; desc='IP 存在明显风控信号（托管/代理出口），部分平台可能受限。'; }
+  else if (score >= 25) { level='🔴 高风险'; levelColor='var(--danger)'; desc:'IP 纯净度低，疑似代理/数据中心，极易被风控拦截。'; }
+  else { level='☠️ 黑名单'; levelColor='var(--danger)'; desc='IP 强烈疑似已知代理/异常出口，风控风险极高。'; }
 
-  return { score, level, levelColor, desc, metrics, isDc, checks };
+  return { score, level, levelColor, desc, metrics, isDc:isHosting||isProxy, checks };
 }
 
 /* ---------------- 人机流量对比 ---------------- */
-function trafficCalc(isDc, score) {
-  // 基于纯净度启发人/机/恶意占比
+function trafficCalc(isDc, score, info) {
+  // 基于纯净度 + 真实特征 启发人/机/恶意占比
   // 家用高纯净: 人高、机低、恶意低
   let human, bot, abuse;
-  if (score >= 85)      { human=72; bot=22; abuse=6; }
-  else if (score>=70)   { human=58; bot=31; abuse=11; }
-  else if (score>=50)   { human=41; bot=40; abuse=19; }
-  else                  { human=25; bot=47; abuse=28; }
-  // 数据中心加成恶意
-  if (isDc) { human-=-3>0?3:0; bot+=2; abuse+=1; }
+  if (score >= 85)      { human=74; bot=20; abuse=6; }
+  else if (score>=70)   { human=60; bot=28; abuse=12; }
+  else if (score>=50)   { human=44; bot=38; abuse=18; }
+  else if (score>=25)   { human=28; bot=45; abuse=27; }
+  else                  { human=18; bot=42; abuse=40; }
+  // 真实特征加成恶意
+  const isProxy = info && info.api_proxy === true;
+  const isHosting = info && info.api_hosting === true;
+  if (isHosting) { human += 2; bot += 3; abuse -= 5; }
+  if (isProxy)   { human -= 8; bot += 5; abuse += 3; }
+  // 兜底到合法区间
+  human = Math.max(5, Math.min(92, Math.round(human)));
+  bot = Math.max(3, Math.min(90, Math.round(bot)));
+  abuse = Math.max(1, Math.min(80, Math.round(abuse)));
+  // 保证近似满100
+  let sum = human+bot+abuse;
+  if (sum !== 100) {
+    abuse = Math.max(1, Math.round(abuse + (100-sum)));
+    sum = human+bot+abuse;
+    if (sum !== 100) { bot = Math.max(0, bot + (100-sum)); sum=human+bot+abuse; }
+  }
   return { human, bot, abuse };
 }
 
@@ -326,6 +366,17 @@ function renderTraffic(t) {
 async function detect(targetType) {
   showLoad('正在检测 IP 归属地…');
   try {
+    if (targetType === 'quote') {
+      // 查询任意 IP：用上一次输入，或提示先输入
+      const inp = $('qIpInput').value.trim();
+      if (!inp) { hideLoad(); showError('请先在上方输入要查询的 IP 地址'); $('qIpInput').focus(); return; }
+      return await doLookup(inp, {fromQuote:true});
+    }
+    if (targetType === 'lookup') {
+      // 已由 doLookup 手动触发，这里不再重复
+      return;
+    }
+
     await getMyIPs();
 
     if (targetType==='v4' && state.v4) state.ip = state.v4;
@@ -334,28 +385,53 @@ async function detect(targetType) {
     else state.ip = state.v4;
 
     if (!state.ip) { hideLoad(); showError('未检测到可用 IP'); return; }
-
-    state.info = await getInfo(state.ip);
-    if (!state.info) { hideLoad(); showError('归属地查询失败，请重试'); return; }
-
-    state.pureData = await getPurity(state.ip);
-
-    // 渲染
-    renderHero();
-    renderInfo();
-    renderPurity(state.pureData);
-    renderTraffic(trafficCalc(state.pureData.isDc, state.pureData.score));
-    renderMap();
-
-    // 更新 tab
-    $('ipv4Val').textContent = state.v4 || '无';
-    $('ipv6Val').textContent = state.v6 || '无';
-
-    hideLoad();
+    state.isOwn = true;
+    await loadForIp(state.ip);
   } catch(e) {
     hideLoad();
     showError('检测出错：'+e.message);
     console.error(e);
+  }
+}
+
+/* 解析并渲染任一 IP（own/别人的统一入口） */
+async function loadForIp(ip) {
+  state.info = await getInfo(ip);
+  if (!state.info) { showError('归属地查询失败，请重试'); return; }
+  state.pureData = await getPurity(ip);
+  state.ip = ip;
+  renderHero();
+  renderInfo();
+  renderPurity(state.pureData);
+  renderTraffic(trafficCalc(state.pureData.isDc, state.pureData.score, state.info));
+  renderMap();
+  // 更新 tab 显示自己的 IP（仅当已知）
+  if (!state.v4) $('ipv4Val').textContent = '--';
+  if (state.v4) $('ipv4Val').textContent = state.v4;
+  if (state.v6) $('ipv6Val').textContent = state.v6;
+  hideLoad();
+}
+
+/* 任意 IP 查询入口 */
+async function doLookup(rawIp, opts) {
+  const ip = String(rawIp||'').trim().replace(/\s+/g,'');
+  if (!ip) { showError('请输入 IP 地址'); return; }
+  const isv6 = ip.includes(':');
+  const isv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
+  if (!isv6 && !isv4) { showError('IP 格式不正确（示例：8.8.8.8 或 2001:db8::1）'); return; }
+  showLoad('正在查询 ' + ip + ' …');
+  state.isOwn = false;
+  try {
+    await loadForIp(ip);
+    // 非本人 IP：WebRTC / DNS 结果仅针对"你自己"，提示置空
+    $('webrtcInfo').innerHTML = '<p class="muted">正在检测的是「'+ip+'」。WebRTC 与 DNS 泄露检测结果反映的是你当前设备的网络，不会因查询目标 IP 而改变。点击按钮可探测你本机是否泄露。</p>';
+    const badge=document.getElementById('webrtcBadge');
+    if(badge){badge.className='badge badge-wait';badge.textContent='针对本机';}
+    const db=document.getElementById('dnsBadge');
+    if(db){db.className='badge badge-wait';db.textContent='针对本机';}
+  } catch(e) {
+    hideLoad();
+    showError('查询出错：'+e.message);
   }
 }
 
@@ -369,11 +445,29 @@ function showError(msg){
 
 /* ---------------- Tab 切换 ---------------- */
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',function(){
-  if (this.classList.contains('active')) return;
+  // 点击当前 tab 不重复
+  const wasQuote = document.getElementById('quoteBox').classList.contains('hidden')===false;
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   this.classList.add('active');
-  detect(this.dataset.type);
+  state.ipType = this.dataset.type;
+  if (this.dataset.type === 'quote') {
+    document.getElementById('quoteBox').classList.remove('hidden');
+  } else {
+    document.getElementById('quoteBox').classList.add('hidden');
+    detect(this.dataset.type);
+  }
 }));
+
+/* 任意 IP 查询按钮 */
+$('btnLookup').addEventListener('click', async function(){
+  this.classList.add('spinning');
+  const ip = $('qIpInput').value.trim();
+  await doLookup(ip || '');
+  setTimeout(()=>this.classList.remove('spinning'), 300);
+});
+$('qIpInput').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') $('btnLookup').click();
+});
 
 /* ---------------- 刷新 ---------------- */
 $('btnRefresh').addEventListener('click',async function(){
