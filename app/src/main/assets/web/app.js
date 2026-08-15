@@ -100,89 +100,82 @@ async function getInfo(ip) {
   };
 }
 
-/* ---- 纯净度辅助判断（无 ip-api 时的关键字兜底） ---- */
-const DC_KW = ['cloud','hosting','microsoft azure','amazon','amazon-02','digitalocean','linode','vultr','hetzner','oracle','aws','huawei','alibaba','tencent','softlayer','ovh','internet invest','cogent','akamai','kagoya','google','packet'];
-const VPN_KW = ['vpn','proxy','tor ','tor-','packet','nord','surfshark','privacy','relay','openvpn','wireguard','antler','hostkey','21vianet'];
+/* ---- 辅助判断（Worker 不可用时的本地兜底） ---- */
+const DC_KW = ['cloud','hosting','microsoft azure','amazon','digitalocean','linode','vultr','hetzner','oracle','aws','huawei','alibaba','tencent','softlayer','ovh','akamai','kagoya','google','packet'];
+const VPN_KW = ['vpn','proxy','tor ','tor-','packet','nord','surfshark','privacy','relay','openvpn','wireguard','21vianet'];
 function isDcByKw(org, isp){ const o=(org||'').toLowerCase(), i=(isp||'').toLowerCase(); return DC_KW.some(k=>o.includes(k)||i.includes(k)); }
 function isVpnish(org, isp){ const o=(org||'').toLowerCase(), i=(isp||'').toLowerCase(); return VPN_KW.some(k=>o.includes(k)||i.includes(k)); }
 
-/* ---------------- 纯净度评分（真实数据源） ---------------- */
+/* ---- 信誉代理 Worker ---- */
+const PURITY_PROXY = 'https://ipdetector-purity.1161467182.workers.dev';
+
+/* ---------------- 纯净度评分（优先走 Worker 真实分，兜底本地启发） ---------------- */
 async function getPurity(ip) {
+  // 1. 优先调 Worker 信誉代理（真实 ip-api / IPQualityScore 服务端判定）
+  try {
+    const resp = await fetch(PURITY_PROXY + '/lookup?ip=' + encodeURIComponent(ip), {mode:'cors'});
+    if (resp.ok) {
+      const d = await resp.json();
+      if (d && d.success) return mapProxyResult(d);
+    }
+  } catch(e) { /* Worker 不可用，走 fallback */ }
+  // 2. fallback: 本地启发式（无 Worker 时仍可用）
+  return fallbackPurity(ip);
+}
+
+function mapProxyResult(d) {
   const metrics = [];
-  let checks = [];
-  const info = state.info || {};
-  const isv6 = String(ip).includes(':');
-  const org = (info.org||'').toLowerCase();
-  const isp = (info.isp||'').toLowerCase();
-  const asn = String(info.asn||'');
-
-  // 真实判定：优先用 ip-api 的 proxy / hosting；拿不到则关键字兜底
-  const isProxy = info.api_proxy === true;
-  const isHosting = info.api_hosting === true;
-  const isCDN = /cloudflare|fastly|akamai|cloudfront/.test(org + ' ' + isp);
-  const hasLoc = !!(info.lat && info.lon && info.lat!==0 && info.lon!==0);
-
-  const add = (name, risk, good, desc, extra) => {
-    metrics.push({name, val:risk, good, desc, extra:extra||{}});
-  };
-
-  // 1) 托管/数据中心（真实 hosting 字段）
-  if (isHosting) {
-    add('托管商 / 数据中心', 72, false, '该 IP 属于云服务/托管商（数据中心），常被用于代理与风控敏感场景。', {key:'hosting'});
-    checks.push('数据中心');
-  } else {
-    add('托管商 / 数据中心', 6, true, '家用 / 移动 / 普通运营商接入，非托管商。', {key:'hosting'});
-  }
-
-  // 2) 代理 / VPN / TOR（真实 proxy 字段）
-  if (isProxy) {
-    add('代理 / VPN / TOR', 88, false, '检测到公开代理 / VPN 出口特征，风控风险很高。', {key:'proxy'});
-    checks.push('代理/VPN');
-  } else {
-    add('代理 / VPN / TOR', 8, true, '未见代理 / VPN / TOR 出口特征。', {key:'proxy'});
-  }
-
-  // 3) CDN / 公共出口（真实 org 判定）
-  if (isCDN) {
-    add('CDN / 公共出口', 62, false, '该 IP 是知名 CDN / 公共出口节点，非家庭直连。', {key:'cdn'});
-    checks.push('CDN');
-  } else {
-    add('CDN / 公共出口', 9, true, '非知名 CDN 出口，属于普通接入。', {key:'cdn'});
-  }
-
-  // 4) 定位可信度
-  if (hasLoc) {
-    add('定位可信度', 7, true, '经纬度解析完整，归属地定位可靠。', {key:'loc'});
-  } else {
-    add('定位可信度', 42, false, '经纬度缺失或不完整，归属地定位不精确。', {key:'loc'});
-    checks.push('定位模糊');
-  }
-
-  // 5) ASN / 运营商信誉（真实 as 的启发）
-  const asIsSuspicious = /TOR|PROX|VPN|HOST|DATACENTER|CLOUD|IDC|CARGOHOST|HOSTKEY/.test(String(info.api_asn||'').toUpperCase());
-  if (asIsSuspicious) {
-    add('ASN 信誉', 55, false, 'AS 编号归属可疑网络（代理/托管/IDC 特征）。', {key:'asn'});
-    checks.push('可疑ASN');
-  } else {
-    add('ASN 信誉', 10, true, 'AS 番号无显著风控特征。', {key:'asn'});
-  }
-
-  // 归一化评分：风险取加权，避免"清一色92"
-  // 权重: 代理/VPN最高(0.30), 托管(0.22), CDN(0.16), 定位(0.12), ASN(0.20)
+  const pv = d.proxy && d.proxy.value;
+  const hv = d.hosting && d.hosting.value;
+  const tv = d.tor && d.tor.value;
+  const bv = d.bot && d.bot.value;
+  const dv = d.datacenter && d.datacenter.value;
+  const add = (name, val, good, desc) => metrics.push({name, val, good, desc, extra:{}});
+  if (hv) add('托管商 / 数据中心', 72, false, '该 IP 属于云服务/托管商（数据中心）。');
+  else add('托管商 / 数据中心', 6, true, '家用/移动/运营商接入，非托管商。');
+  if (pv || tv) add('代理 / VPN / TOR', 88, false, '检测到代理/VPN/TOR 出口特征。');
+  else add('代理 / VPN / TOR', 8, true, '未见代理/VPN/TOR 出口特征。');
+  const isCDN = d.org && /cloudflare|fastly|akamai|cloudfront/i.test(d.org);
+  if (isCDN || dv) add('CDN / 公共出口', 62, false, '该 IP 是 CDN/数据中心节点。');
+  else add('CDN / 公共出口', 9, true, '非 CDN 出口，属于普通接入。');
+  const hasLoc = !!(d.latitude && d.longitude && d.latitude !== 0);
+  add('定位可信度', hasLoc ? 7 : 42, hasLoc, hasLoc ? '归属地定位可靠。' : '归属地定位不精确。');
+  add('信誉/机器人检测', bv ? 60 : 12, !bv, bv ? '检测到机器人/爬虫特征。' : '未见机器人/爬虫特征。');
   const weights = [0.22, 0.30, 0.16, 0.12, 0.20];
-  const vals = metrics.map(m=>m.val);
-  const total = vals.reduce((s,v,i)=> s + v*weights[i], 0);
-  let score = Math.round(100 - total);
-  score = Math.max(3, Math.min(98, score));
-
+  const vals = metrics.map(m => m.val);
+  const total = vals.reduce((s, v, i) => s + v * (weights[i] || 0.2), 0);
+  const score = Math.max(3, Math.min(98, Math.round(100 - total)));
   let level, levelColor, desc;
-  if (score >= 85) { level='🟢 优秀'; levelColor='var(--good)'; desc='IP 纯净度高，疑似家用/移动直连，风控风险低。'; }
-  else if (score >= 70) { level='🟡 良好'; levelColor='var(--mid)'; desc='IP 大部分干净，可能存在公共出口特征。'; }
-  else if (score >= 50) { level='🟠 一般'; levelColor='var(--warn)'; desc='IP 存在明显风控信号（托管/代理出口），部分平台可能受限。'; }
-  else if (score >= 25) { level='🔴 高风险'; levelColor='var(--danger)'; desc:'IP 纯净度低，疑似代理/数据中心，极易被风控拦截。'; }
-  else { level='☠️ 黑名单'; levelColor='var(--danger)'; desc='IP 强烈疑似已知代理/异常出口，风控风险极高。'; }
+  if (score >= 85) { level = '🟢 优秀'; levelColor = 'var(--good)'; desc = 'IP 纯净度高，风控风险低。'; }
+  else if (score >= 70) { level = '🟡 良好'; levelColor = 'var(--mid)'; desc = 'IP 大部分干净。'; }
+  else if (score >= 50) { level = '🟠 一般'; levelColor = 'var(--warn)'; desc = 'IP 存在明显风控信号。'; }
+  else if (score >= 25) { level = '🔴 高风险'; levelColor = 'var(--danger)'; desc = 'IP 纯净度低，易被风控拦截。'; }
+  else { level = '☠️ 黑名单'; levelColor = 'var(--danger)'; desc = 'IP 风险极高。'; }
+  const isDc = hv || dv || pv;
+  return { score, level, levelColor, desc, metrics, isDc, checks: [], source: d.source || 'proxy' };
+}
 
-  return { score, level, levelColor, desc, metrics, isDc:isHosting||isProxy, checks };
+function fallbackPurity(ip) {
+  const metrics = []; const info = state.info || {};
+  const org = (info.org||'').toLowerCase(); const isp = (info.isp||'').toLowerCase();
+  const isHosting = isDcByKw(org, isp); const isProxy = info.api_proxy === true || isVpnish(org, isp);
+  const isCDN = /cloudflare|fastly|akamai|cloudfront/.test(org+' '+isp);
+  const hasLoc = !!(info.lat && info.lon && info.lat!==0 && info.lon!==0);
+  const add = (n, v, g, d) => metrics.push({name:n, val:v, good:g, desc:d, extra:{}});
+  add('托管商 / 数据中心', isHosting?72:6, !isHosting, isHosting?'IP 属于云服务/托管商。':'家用/运营商接入。');
+  add('代理 / VPN / TOR', isProxy?88:8, !isProxy, isProxy?'检测到代理/VPN 出口。':'未见代理/VPN 特征。');
+  add('CDN / 公共出口', isCDN?62:9, !isCDN, isCDN?'该 IP 是 CDN 出口。':'非 CDN 出口。');
+  add('定位可信度', hasLoc?7:42, hasLoc, hasLoc?'归属地定位可靠。':'归属地不精确。');
+  add('ASN 信誉', 10, true, 'AS 番号无显著风控特征。');
+  const weights = [0.22, 0.30, 0.16, 0.12, 0.20];
+  const total = metrics.reduce((s,m,i) => s + m.val * (weights[i]||0.2), 0);
+  const score = Math.max(3, Math.min(98, Math.round(100 - total)));
+  let level, levelColor, desc;
+  if (score>=85) { level='🟢 优秀'; levelColor='var(--good)'; desc='IP 纯净度高。'; }
+  else if (score>=70) { level='🟡 良好'; levelColor='var(--mid)'; desc='IP 大部分干净。'; }
+  else if (score>=50) { level='🟠 一般'; levelColor='var(--warn)'; desc='IP 存在风控信号。'; }
+  else { level='🔴 高风险'; levelColor='var(--danger)'; desc='IP 纯净度低。'; }
+  return { score, level, levelColor, desc, metrics, isDc:isHosting||isProxy, checks:[], source:'fallback' };
 }
 
 /* ---------------- 人机流量对比 ---------------- */
