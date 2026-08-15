@@ -208,14 +208,34 @@ function trafficCalc(isDc, score, info) {
 }
 
 /* ---------------- 渲染：主信息 ---------------- */
+// 旗帜/地区显示：台湾不渲染旗帜emoji，改用文字，避免繁体/主权争议
+function displayFlag(info){
+  if(!info) return '🌐';
+  const cc = (info.country_code || '').toUpperCase();
+  // 中国台湾：用文字代替旗帜 emoji
+  if(cc === 'TW') return '台湾';
+  // 其他：用 emoji 国旗
+  if(info.flag_emoji) return info.flag_emoji;
+  return '🌐';
+}
+function displayCountry(info){
+  if(!info) return '未知';
+  const cc = (info.country_code || '').toUpperCase();
+  if(cc === 'TW') return '中国台湾';
+  return info.country || '未知';
+}
+
 function renderHero() {
   $('heroIp').textContent = state.ip;
-  const flag = (state.info && state.info.flag_emoji) || '🌐';
-  $('flagLarge').textContent = flag;
+  $('flagLarge').textContent = displayFlag(state.info);
+  const flag = displayFlag(state.info);
+  // 台湾用文字放 heroSub
   const cc = state.info ? state.info.country_code : '';
   const city = state.info ? state.info.city : '';
   const isp = state.info ? state.info.isp : '';
-  $('heroSub').textContent = [cc, city, isp].filter(Boolean).join(' · ') || '—';
+  const countryText = displayCountry(state.info);
+  const sub = cc === 'TW' ? countryText : cc;
+  $('heroSub').textContent = [sub, city, isp].filter(Boolean).join(' · ') || '—';
 }
 
 function renderInfo() {
@@ -225,7 +245,7 @@ function renderInfo() {
   $('i_asn').textContent = 'AS' + i.asn;
   $('i_isp').textContent = i.isp || '--';
   $('i_org').textContent = i.org || i.asn_org || '--';
-  $('i_country').textContent = (i.flag_emoji ? i.flag_emoji+' ' : '') + i.country + ' ('+i.country_code+')';
+  $('i_country').textContent = displayCountry(i) + ' (' + i.country_code + ')';
   $('i_region').textContent = (i.region||'--') + ' / ' + (i.region_code||'');
   $('i_city').textContent = i.city || '--';
   $('i_loc').textContent = (i.lat!==undefined && i.lat!==null) ? i.lat.toFixed(4)+', '+i.lon.toFixed(4) : '--';
