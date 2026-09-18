@@ -9,3 +9,6 @@ keystore.properties
 # 临时
 .DS_Store
 make_icon.py
+
+# 本地安全扫描产物
+.mimosa/

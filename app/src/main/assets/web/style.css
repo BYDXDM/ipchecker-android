@@ -32,11 +32,11 @@ body{padding-bottom:40px}
 
 .wrap{max-width:860px;margin:0 auto;padding:16px}
 
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px;animation:fade .4s ease}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px;animation:fade .4s ease;position:relative}
 @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .card-title{font-size:15px;font-weight:700;margin-bottom:14px;color:#cdd7ee;display:flex;align-items:center;gap:6px}
-.card-head-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
-.card-head-row .card-title{margin-bottom:0}
+.card-head-row{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.card-head-row .card-title{margin-bottom:0;margin-right:auto}
 .hint{color:var(--sub);font-size:12.5px;margin-bottom:12px}
 .muted{color:var(--sub)}
 
@@ -172,9 +172,29 @@ body{padding-bottom:40px}
 .qbtn{width:auto;flex-shrink:0;margin-top:0;padding:13px 20px}
 .qbtn.spinning .spin-ico{animation:spin 1s linear infinite}
 
-.foot{text-align:center;color:#55607d;font-size:12px;padding:12px}
+.foot{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;color:#55607d;font-size:12px;padding:12px}
 
 /* 状态色 */
 .st-good{color:var(--good)}
 .st-warn{color:var(--warn)}
 .st-bad{color:var(--danger)}
+
+/* ============ 模块拖拽排序 ============ */
+.drag-handle{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border:none;background:transparent;color:var(--sub);border-radius:8px;cursor:grab;padding:0;
+  touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:color .2s,background .2s}
+.drag-handle svg{fill:currentColor;pointer-events:none}
+.drag-handle:hover{color:var(--txt);background:var(--card2)}
+.drag-handle:active{cursor:grabbing;color:var(--acc)}
+.hero-handle{position:absolute;top:12px;right:12px;z-index:3}
+.card.dragging{opacity:.45;outline:2px dashed var(--acc);outline-offset:3px;animation:none}
+body.dragging-active{-webkit-user-select:none;user-select:none}
+body.dragging-active .card{animation:none}
+
+/* 重置排序按钮 */
+.reset-order{background:var(--card);border:1px solid var(--line);color:var(--sub);font-size:12px;
+  padding:7px 14px;border-radius:9px;cursor:pointer;transition:.2s}
+.reset-order:active{color:var(--acc);border-color:var(--acc)}
+
+/* 通用隐藏 */
+.hidden{display:none!important}
