@@ -1,19 +1,14 @@
 package com.ipdetector.ipcheck;
 
 import android.annotation.SuppressLint;
-import android.content.Intent;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.view.View;
-import android.webkit.GeolocationPermissions;
-import android.webkit.ValueCallback;
-import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.webkit.WebViewAssetLoader;
+import androidx.webkit.WebViewClientCompat;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -30,43 +25,31 @@ public class MainActivity extends AppCompatActivity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setGeolocationEnabled(false);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
 
-        // 允许从本地 file:// 页面发起 http/https 请求（需 INTERNET 权限）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            s.setAllowFileAccessFromFileURLs(true);
-            s.setAllowUniversalAccessFromFileURLs(true);
-        }
+        // 通过 https 虚拟域提供 assets 页面：页面获得正常 Web 源，
+        // 调外部 API 走标准 CORS，不再需要 file:// 万能文件访问（历史漏洞放大器）
+        final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+                .setDomain("appassets.androidplatform.net")
+                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                .build();
 
-        // 拦截 http/https 深链网页，留在 WebView 内打开
-        webView.setWebViewClient(new WebViewClient() {
+        webView.setWebViewClient(new WebViewClientCompat() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return loader.shouldInterceptRequest(request.getUrl());
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl() == null ? "" : request.getUrl().toString();
-                if (url.startsWith("http://") || url.startsWith("https://")) {
-                    return false; // 留在 WebView
-                }
-                return true;
+                String scheme = request.getUrl().getScheme();
+                // 仅放行 https（含 appassets 虚拟域）；file/intent/javascript 等其余 scheme 一律拦截
+                return !"https".equals(scheme);
             }
         });
 
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
-                callback.invoke(origin, true, false);
-            }
-        });
-
-        // 使用远程页面（避免 file:// 的 CORS / 混合内容问题，可直接调用外部 API）
-        // 默认加载内置 assets 页面；若需要在线版本可切换
-        loadLocalPage();
-    }
-
-    private void loadLocalPage() {
-        // 内置 resources 里的 index.html（assets/web/index.html）
-        webView.loadUrl("file:///android_asset/web/index.html");
+        webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html");
     }
 
     @Override

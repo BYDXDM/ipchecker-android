@@ -75,27 +75,21 @@ async function getMyIPs() {
 
 /* ---------------- IP 归属全量信息 ---------------- */
 async function getInfo(ip) {
-  // ipwho.is 为主, ip.sb 兜底, ip-api.com 补充 proxy/hosting —— 三路并行提速
-  let who = null, sb = null, api = null;
+  // ipwho.is 为主, ip.sb 兜底 —— 两路并行提速（均 HTTPS；
+  // 明文 HTTP 的 ip-api.com 直连已移除，纯净度改由 HTTPS Worker 服务端判定）
   const results = await Promise.all([
     fetchT('https://ipwho.is/' + encodeURIComponent(ip)).then(r => r.json()).catch(() => null),
     fetchT('https://api.ip.sb/geoip/' + encodeURIComponent(ip)).then(r => r.json()).catch(() => null),
-    // ip-api.com 免费(仅http)，提供 proxy/hosting —— 纯净度判定关键
-    fetchT('http://ip-api.com/json/' + encodeURIComponent(ip) +
-      '?fields=status,country,regionName,city,isp,org,as,proxy,hosting,mobile', { mode: 'cors' })
-      .then(r => r.json()).catch(() => null),
   ]);
-  who = results[0]; sb = results[1]; api = results[2];
-  if (api && api.status !== 'success') api = null;
-
+  const who = results[0], sb = results[1];
   const src = who && who.success ? who : (sb || null);
-  if (!src && !api) return null;
+  if (!src) return null;
 
   const isv6 = String(ip).includes(':');
   const owner = who && who.success ? who : {};
   const conn = owner.connection || {};
-  const org = conn.org || (sb ? sb.organization : '') || (api ? api.org : '');
-  const isp = conn.isp || (sb ? sb.isp : '') || (api ? api.isp : '');
+  const org = conn.org || (sb ? sb.organization : '');
+  const isp = conn.isp || (sb ? sb.isp : '');
 
   return {
     ip, version: isv6 ? 'IPv6' : 'IPv4',
@@ -104,11 +98,11 @@ async function getInfo(ip) {
     asn_org: conn.org || (sb ? sb.asn_organization : '--'),
     isp: isp || '--',
     org,
-    country: owner.country || (sb ? sb.country : '') || (api ? api.country : ''),
-    country_code: owner.country_code || (sb ? sb.country_code : '') || (api ? api.country : ''),
-    region: owner.region || (sb ? sb.region : '') || (api ? api.regionName : ''),
+    country: owner.country || (sb ? sb.country : ''),
+    country_code: owner.country_code || (sb ? sb.country_code : ''),
+    region: owner.region || (sb ? sb.region : ''),
     region_code: owner.region_code || (sb ? sb.region_code : '') || '',
-    city: owner.city || (sb ? sb.city : '') || (api ? api.city : ''),
+    city: owner.city || (sb ? sb.city : ''),
     lat: owner.latitude !== undefined ? owner.latitude : (sb ? sb.latitude : null),
     lon: owner.longitude !== undefined ? owner.longitude : (sb ? sb.longitude : null),
     postal: owner.postal || null,
@@ -118,9 +112,9 @@ async function getInfo(ip) {
     timezone: owner.timezone ? owner.timezone.id : (sb ? sb.timezone : '--'),
     tz_offset: owner.timezone ? owner.timezone.offset : (sb ? sb.offset : null),
     tz_utc: owner.timezone ? owner.timezone.utc : null,
-    // 纯净度相关真实数据（ip-api 不可用时由本地关键词启发兜底）
-    api_proxy: api ? (api.proxy === true) : isVpnish(org, isp),
-    api_hosting: api ? (api.hosting === true) : isDcByKw(org, isp),
+    // 纯净度相关（无服务端数据时由本地关键词启发兜底）
+    api_proxy: isVpnish(org, isp),
+    api_hosting: isDcByKw(org, isp),
   };
 }
 
@@ -244,6 +238,7 @@ function displayCountry(info) {
 }
 
 function renderHero() {
+  $('heroTitle').textContent = state.isOwn ? '我的公网 IP 地址' : '查询的 IP 地址';
   $('heroIp').textContent = state.ip;
   $('flagLarge').textContent = displayFlag(state.info);
   const i = state.info || {};
@@ -358,7 +353,8 @@ function renderPurity(p) {
   const lvlTxt = p.level.includes('优秀') ? '优秀' : p.level.includes('良好') ? '良好' : p.level.includes('一般') ? '一般' : '高风险';
   $('hpLevel').textContent = lvlTxt;
   $('hpLevel').style.color = hpColor;
-  $('hpDesc').textContent = p.score >= 70 ? '纯净度优秀，直连该 IP 风控极低'
+  $('hpDesc').textContent = p.score >= 85 ? '纯净度优秀，直连该 IP 风控极低'
+    : p.score >= 70 ? '纯净度良好，大部分场景可用'
     : p.score >= 50 ? '存在一定风控信号，注意识别' : '纯净度低，高风险';
 
   const wrap = $('metrics');
@@ -390,14 +386,6 @@ function renderTraffic(t) {
 async function detect(targetType) {
   showLoad('正在检测 IP 归属地…');
   try {
-    if (targetType === 'quote') {
-      // 顶部刷新按钮在查询页被按下：用输入框里的 IP
-      const inp = $('qIpInput').value.trim();
-      if (!inp) { hideLoad(); notice('请先在上方输入要查询的 IP 地址'); $('qIpInput').focus(); return; }
-      await doLookup(inp);
-      return;
-    }
-
     await getMyIPs();
 
     if (targetType === 'v4') {
@@ -510,6 +498,12 @@ $('btnRefresh').addEventListener('click', async function () {
   if (this.disabled) return;
   this.disabled = true;
   this.classList.add('spinning');
+  // 全局刷新 = 回到本机重新检测；要重查别人的 IP，用“查询”按钮即可
+  if (state.ipType === 'quote') {
+    state.ipType = 'v4';
+    document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.type === 'v4'));
+    $('quoteBox').classList.add('hidden');
+  }
   try { await detect(state.ipType); }
   finally {
     this.disabled = false;
@@ -554,7 +548,8 @@ async function runWebrtc() {
     if (/(^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^169\.254\.|^0\.)/.test(addr)) return true;
     if (addr.includes(':')) {
       const a = addr.toLowerCase();
-      return a === '::1' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a);
+      // fc00::/7 ULA、fe80::/10 链路本地、fec0::/10 站点本地（QEMU 等旧环境仍在用）均算本地
+      return a === '::1' || /^f[cd]/.test(a) || /^fe[89a-f]/.test(a);
     }
     return false;
   }

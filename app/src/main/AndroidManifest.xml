@@ -9,7 +9,6 @@
         android:icon="@mipmap/ic_launcher"
         android:label="IP 侦探"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.IPDetector">
 
         <activity

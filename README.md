@@ -4,10 +4,11 @@
 
 ## 功能
 - IP 归属地（IPv4/IPv6）
-- IP 纯净度 / 风控评分
-- 人机流量对比
+- IP 纯净度 / 风控评分（HTTPS Worker 服务端判定，Worker 不可用时本地关键词启发兜底）
+- 查任意 IP：输入任意 IPv4/IPv6 查询其归属地与纯净度
+- 人机流量对比（按纯净度档位估算的模拟数据）
 - WebRTC 真实 IP 泄露检测
-- DNS 泄露检测
+- DNS 检测（浏览器沙箱无法读取系统 DNS 配置，实际为 DoH 可用性与公网出口对比的辅助判断）
 - 归属地地图
 - 时区时钟
 - 模块自由排序：按住每张卡片右上角的 ⠿ 手柄拖动即可调整顺序，自动记忆（页脚可一键重置）
@@ -20,8 +21,9 @@ Push 到 `main` 分支会自动触发 GitHub Actions 编译 APK；推 `v*` tag �
 
 ## 本地构建（需要 Android Studio / Android SDK）
 ```bash
-# 在项目根目录放一个 keystore.properties（可选，release 签名用）
-# storeFile / storePassword / keyAlias / keyPassword
+# release 构建必须在项目根目录放一个 keystore.properties（debug 构建不需要）：
+# storeFile=keystore/ipdetector.keystore
+# storePassword / keyAlias / keyPassword
 
 gradle assembleRelease
 # 输出: app/build/outputs/apk/release/app-release.apk
