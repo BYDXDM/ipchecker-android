@@ -8,8 +8,8 @@ android {
         applicationId "com.ipdetector.ipcheck"
         minSdk 23
         targetSdk 34
-        versionCode 2
-        versionName "1.1"
+        versionCode 3
+        versionName "1.2"
     }
 
     signingConfigs {
@@ -18,7 +18,7 @@ android {
             def f = new File("keystore.properties")
             if (f.exists()) {
                 f.withInputStream { props.load(it) }
-                storeFile file(props.getProperty('storeFile'))
+                storeFile rootProject.file(props.getProperty('storeFile'))
                 storePassword props.getProperty('storePassword')
                 keyAlias props.getProperty('keyAlias')
                 keyPassword props.getProperty('keyPassword')

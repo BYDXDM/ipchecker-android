@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -21,23 +25,25 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate release keystore
+      # 签名固定为仓库内 keystore/ipdetector.keystore，保证各版本可覆盖安装。
+      # 个人工具，keystore 与密码随仓库公开。
+      - name: Write keystore.properties
         run: |
-          keytool -genkeypair -v \
-            -keystore ${{ runner.temp }}/ipdetector.keystore \
-            -alias ipdetector \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass ip123detector \
-            -keypass ip123detector \
-            -dname "CN=IPDetector, OU=Dev, O=IPDetector, L=City, S=State, C=TW"
-
-      - name: Build Release APK
-        run: |
-          echo "storeFile=$( echo '${{ runner.temp }}/ipdetector.keystore' )" > keystore.properties
+          echo "storeFile=${{ github.workspace }}/keystore/ipdetector.keystore" > keystore.properties
           echo "storePassword=ip123detector" >> keystore.properties
           echo "keyAlias=ipdetector" >> keystore.properties
           echo "keyPassword=ip123detector" >> keystore.properties
-          gradle assembleRelease --no-daemon
+
+      - name: Build Release APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Read version for release title
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: ver
+        run: |
+          VNAME=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle)
+          VCODE=$(grep -oP 'versionCode\s+\K[0-9]+' app/build.gradle)
+          echo "name=v$VNAME (versionCode $VCODE)" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -46,3 +52,15 @@ jobs:
           path: |
             app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.ver.outputs.name }}
+          body: |
+            自动构建的 Release 签名 APK，可直接下载安装。
+            签名固定，可覆盖安装旧版本。
+          files: |
+            app/build/outputs/apk/release/*.apk
+          fail_on_unmatched_files: true

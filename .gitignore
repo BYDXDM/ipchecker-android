@@ -16,3 +16,4 @@ make_icon.py
 # 本机 SDK 路径
 local.properties
 *.keystore
+!keystore/ipdetector.keystore

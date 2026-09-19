@@ -13,8 +13,10 @@
 - 模块自由排序：按住每张卡片右上角的 ⠿ 手柄拖动即可调整顺序，自动记忆（页脚可一键重置）
 
 ## 构建
-Push 到 `main` 分支会自动触发 GitHub Actions 编译 APK，产物为 Release 签名版（自动生成 keystore 签名，可直接安装）。
-构建完成后在 Actions 页面的 `ip-detector-apk` artifact 里下载 APK。
+Push 到 `main` 分支会自动触发 GitHub Actions 编译 APK；推 `v*` tag 额外自动创建 GitHub Release 并挂上 APK（Release 名从 build.gradle 读 versionName/versionCode）。
+
+签名固定为仓库内 `keystore/ipdetector.keystore`（个人工具，密码随仓库公开），所有版本互相可覆盖安装。
+日常构建可在 Actions 页面的 `ip-detector-apk` artifact 里下载 APK；正式发版见 Releases 页。
 
 ## 本地构建（需要 Android Studio / Android SDK）
 ```bash
