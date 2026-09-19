@@ -12,3 +12,7 @@ make_icon.py
 
 # 本地安全扫描产物
 .mimosa/
+
+# 本机 SDK 路径
+local.properties
+*.keystore
