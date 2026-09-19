@@ -141,6 +141,22 @@ async function getPurity(ip) {
   return fallbackPurity(ip);
 }
 
+/* ---- 评分共享逻辑：加权合成与档位判定（Worker/本地兜底两路共用） ---- */
+const PURITY_WEIGHTS = [0.22, 0.30, 0.16, 0.12, 0.20];
+
+function scoreFromMetrics(metrics) {
+  const total = metrics.reduce((s, m, i) => s + m.val * (PURITY_WEIGHTS[i] || 0.2), 0);
+  return Math.max(3, Math.min(98, Math.round(100 - total)));
+}
+
+function levelFor(score) {
+  if (score >= 85) return { level: '🟢 优秀', levelColor: 'var(--good)', desc: 'IP 纯净度高，风控风险低。' };
+  if (score >= 70) return { level: '🟡 良好', levelColor: 'var(--mid)', desc: 'IP 大部分干净。' };
+  if (score >= 50) return { level: '🟠 一般', levelColor: 'var(--warn)', desc: 'IP 存在明显风控信号。' };
+  if (score >= 25) return { level: '🔴 高风险', levelColor: 'var(--danger)', desc: 'IP 纯净度低，易被风控拦截。' };
+  return { level: '☠️ 黑名单', levelColor: 'var(--danger)', desc: 'IP 风险极高。' };
+}
+
 function mapProxyResult(d) {
   const metrics = [];
   const pv = d.proxy && d.proxy.value;
@@ -159,17 +175,9 @@ function mapProxyResult(d) {
   const hasLoc = !!(d.latitude && d.longitude && d.latitude !== 0);
   add('定位可信度', hasLoc ? 7 : 42, hasLoc, hasLoc ? '归属地定位可靠。' : '归属地定位不精确。');
   add('信誉/机器人检测', bv ? 60 : 12, !bv, bv ? '检测到机器人/爬虫特征。' : '未见机器人/爬虫特征。');
-  const weights = [0.22, 0.30, 0.16, 0.12, 0.20];
-  const vals = metrics.map(m => m.val);
-  const total = vals.reduce((s, v, i) => s + v * (weights[i] || 0.2), 0);
-  const score = Math.max(3, Math.min(98, Math.round(100 - total)));
-  let level, levelColor, desc;
-  if (score >= 85) { level = '🟢 优秀'; levelColor = 'var(--good)'; desc = 'IP 纯净度高，风控风险低。'; }
-  else if (score >= 70) { level = '🟡 良好'; levelColor = 'var(--mid)'; desc = 'IP 大部分干净。'; }
-  else if (score >= 50) { level = '🟠 一般'; levelColor = 'var(--warn)'; desc = 'IP 存在明显风控信号。'; }
-  else if (score >= 25) { level = '🔴 高风险'; levelColor = 'var(--danger)'; desc = 'IP 纯净度低，易被风控拦截。'; }
-  else { level = '☠️ 黑名单'; levelColor = 'var(--danger)'; desc = 'IP 风险极高。'; }
-  return { score, level, levelColor, desc, metrics, source: d.source || 'proxy' };
+  const score = scoreFromMetrics(metrics);
+  const tier = levelFor(score);
+  return { score, ...tier, metrics, source: d.source || 'proxy' };
 }
 
 function fallbackPurity(ip) {
@@ -184,15 +192,9 @@ function fallbackPurity(ip) {
   add('CDN / 公共出口', isCDN ? 62 : 9, !isCDN, isCDN ? '该 IP 是 CDN 出口。' : '非 CDN 出口。');
   add('定位可信度', hasLoc ? 7 : 42, hasLoc, hasLoc ? '归属地定位可靠。' : '归属地不精确。');
   add('ASN 信誉', 10, true, 'AS 番号无显著风控特征。');
-  const weights = [0.22, 0.30, 0.16, 0.12, 0.20];
-  const total = metrics.reduce((s, m, i) => s + m.val * (weights[i] || 0.2), 0);
-  const score = Math.max(3, Math.min(98, Math.round(100 - total)));
-  let level, levelColor, desc;
-  if (score >= 85) { level = '🟢 优秀'; levelColor = 'var(--good)'; desc = 'IP 纯净度高。'; }
-  else if (score >= 70) { level = '🟡 良好'; levelColor = 'var(--mid)'; desc = 'IP 大部分干净。'; }
-  else if (score >= 50) { level = '🟠 一般'; levelColor = 'var(--warn)'; desc = 'IP 存在风控信号。'; }
-  else { level = '🔴 高风险'; levelColor = 'var(--danger)'; desc = 'IP 纯净度低。'; }
-  return { score, level, levelColor, desc, metrics, source: 'fallback' };
+  const score = scoreFromMetrics(metrics);
+  const tier = levelFor(score);
+  return { score, ...tier, metrics, source: 'fallback' };
 }
 
 /* ---------------- 人机流量对比 ---------------- */
@@ -358,17 +360,28 @@ function renderPurity(p) {
     : p.score >= 50 ? '存在一定风控信号，注意识别' : '纯净度低，高风险';
 
   const wrap = $('metrics');
-  wrap.innerHTML = '';
+  wrap.textContent = '';
   p.metrics.forEach(m => {
     const color = m.good ? 'var(--good)' : (m.val <= 35 ? 'var(--mid)' : 'var(--danger)');
     const row = document.createElement('div');
     row.className = 'metric';
-    row.innerHTML = `
-      <span class="metric-name">${m.name}${m.good ? ' ✅' : ' ⚠️'}</span>
-      <div class="metric-bar"><div class="metric-fill" style="width:0%;background:${color};" data-w="${m.val}"></div></div>
-      <span class="metric-val" style="color:${color}">${m.val}%</span>`;
+    const name = document.createElement('span');
+    name.className = 'metric-name';
+    name.textContent = m.name + (m.good ? ' ✅' : ' ⚠️');
+    const bar = document.createElement('div');
+    bar.className = 'metric-bar';
+    const fill = document.createElement('div');
+    fill.className = 'metric-fill';
+    fill.style.width = '0%';
+    fill.style.background = color;
+    bar.appendChild(fill);
+    const val = document.createElement('span');
+    val.className = 'metric-val';
+    val.style.color = color;
+    val.textContent = m.val + '%';
+    row.appendChild(name); row.appendChild(bar); row.appendChild(val);
     wrap.appendChild(row);
-    setTimeout(() => { row.querySelector('.metric-fill').style.width = m.val + '%'; }, 80);
+    setTimeout(() => { fill.style.width = m.val + '%'; }, 80);
   });
 }
 
@@ -716,7 +729,8 @@ function applySavedOrder() {
 }
 
 function saveOrder() {
-  try { localStorage.setItem(ORDER_KEY, JSON.stringify(moduleIds())); } catch (e) {}
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(moduleIds())); }
+  catch (e) { console.warn('保存模块顺序失败（可能存储配额已满）：', e); }
   $('btnResetOrder').classList.remove('hidden');
 }
 
