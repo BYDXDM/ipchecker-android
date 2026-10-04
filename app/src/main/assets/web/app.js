@@ -743,33 +743,51 @@ function resetOrder() {
   $('btnResetOrder').classList.add('hidden');
 }
 
-/* 把拖拽中的卡片插到 clientY 所指向的位置 */
+/* 把拖拽中的卡片插到 clientY 所指向的位置。
+   只在真正跨过某张卡片中线（±滞回带）时才移动 DOM，并跳过位置不变的挪动，
+   避免无谓的重排和动画重启。 */
+const SWAP_BAND = 6;    // 中线滞回带（px），防止在边界来回抖动
+const EDGE_ZONE = 72;   // 贴近屏幕上下缘的自动滚动区（px）
+const EDGE_SPEED = 560; // 自动滚动速度（px/秒）
+
 function reorderAt(clientY) {
   if (!dragEl) return;
   const others = Array.prototype.filter.call(modulesEl.children, el => el !== dragEl);
-  let next = null;
   for (let i = 0; i < others.length; i++) {
     const r = others[i].getBoundingClientRect();
-    if (clientY < r.top + r.height / 2) { next = others[i]; break; }
+    const mid = r.top + r.height / 2;
+    if (clientY < mid - SWAP_BAND) {
+      if (others[i] !== dragEl.nextElementSibling) modulesEl.insertBefore(dragEl, others[i]);
+      return;
+    }
+    if (clientY <= mid + SWAP_BAND) return; // 指针停在滞回带内：保持不动
   }
-  if (next) modulesEl.insertBefore(dragEl, next);
-  else modulesEl.appendChild(dragEl);
+  if (dragEl.nextElementSibling) modulesEl.appendChild(dragEl);
 }
 
-/* 拖拽期间贴近屏幕上下缘时自动滚动，否则够不到视口外的卡片 */
-function dragFrame() {
+/* 拖拽期间的每帧工作：贴近屏幕上下缘时自动滚动（否则够不到视口外的卡片），
+   并按最新指针位置重排。布局读取与 DOM 移动全部收敛到 rAF，
+   pointermove 只记坐标——把每秒上百次的重排降为每帧最多一次。 */
+let lastFrameTs = 0, dragDirty = false;
+function dragFrame(ts) {
   if (!dragEl) return;
+  const dt = lastFrameTs ? Math.min(ts - lastFrameTs, 100) : 16.7;
+  lastFrameTs = ts;
+  scrollDir = lastPointerY < EDGE_ZONE ? -1 : (lastPointerY > window.innerHeight - EDGE_ZONE ? 1 : 0);
   if (scrollDir) {
-    window.scrollBy(0, scrollDir * 12);
+    window.scrollBy(0, Math.round(scrollDir * EDGE_SPEED * dt / 1000));
+    dragDirty = true;
+  }
+  if (dragDirty) {
     reorderAt(lastPointerY);
+    dragDirty = false;
   }
   rafId = requestAnimationFrame(dragFrame);
 }
 
 function onDragMove(e) {
   lastPointerY = e.clientY;
-  scrollDir = lastPointerY < 72 ? -1 : (lastPointerY > window.innerHeight - 72 ? 1 : 0);
-  reorderAt(lastPointerY);
+  dragDirty = true;
 }
 
 function onDragEnd() {
@@ -781,6 +799,7 @@ function onDragEnd() {
   document.removeEventListener('pointerup', onDragEnd);
   document.removeEventListener('pointercancel', onDragEnd);
   dragEl = null; dragHandle = null; scrollDir = 0;
+  lastFrameTs = 0; dragDirty = false;
   saveOrder();
 }
 
@@ -798,6 +817,8 @@ modulesEl.addEventListener('pointerdown', function (e) {
   document.addEventListener('pointermove', onDragMove);
   document.addEventListener('pointerup', onDragEnd);
   document.addEventListener('pointercancel', onDragEnd);
+  lastFrameTs = 0;
+  dragDirty = true;
   rafId = requestAnimationFrame(dragFrame);
 });
 
