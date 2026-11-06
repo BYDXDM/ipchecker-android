@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<link rel="stylesheet" href="leaflet/leaflet.css"/>
+<script src="leaflet/leaflet.js"></script>
+<style>
+  html,body{margin:0;height:100%;background:#0d1526;overflow:hidden}
+  #map{position:absolute;inset:0}
+  .leaflet-container{background:#0d1526;font:12px/1.4 -apple-system,'HarmonyOS Sans','Microsoft YaHei',sans-serif}
+  .leaflet-popup-content-wrapper{background:#1a2438;color:#e8edf6;border:1px solid #2b3a5c;border-radius:10px}
+  .leaflet-popup-tip{background:#1a2438;border:1px solid #2b3a5c}
+  .map-note{position:absolute;left:6px;bottom:4px;z-index:1000;color:#7d8db1;font-size:10px;text-shadow:0 1px 2px rgba(0,0,0,.8);pointer-events:none}
+  .mnav{position:absolute;top:8px;right:8px;z-index:1000;display:flex;gap:6px}
+  .mnav button{background:rgba(26,36,56,.92);border:1px solid #2b3a5c;color:#aebad6;padding:5px 10px;border-radius:8px;font-size:12px;cursor:pointer;transition:.15s}
+  .mnav button.active{color:#fff;border-color:#4d7cff;background:#1f2d52}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="mnav" id="mnav">
+  <button data-src="gaode" class="active">高德</button>
+  <button data-src="google">谷歌</button>
+  <button data-src="esri">卫星</button>
+  <button data-src="esri-street">街道</button>
+  <button data-src="carto">国际</button>
+</div>
+<div class="map-note" id="mapNote">高德地图 · GCJ-02 坐标已纠偏</div>
+<script>
+/* 境内判定：高德瓦片是 GCJ-02，纠偏只应作用于中国境内坐标；境外（如代理出口在美国）直接用原坐标 */
+function inChina(lat, lon) {
+  return lat >= 0.8293 && lat <= 55.8271 && lon >= 72.004 && lon <= 137.8347;
+}
+/* WGS-84 -> GCJ-02 纠偏（高德瓦片坐标系），标准公开算法 */
+function wgs2gcj(lat, lon) {
+  if (!inChina(lat, lon)) return [lat, lon];
+  var a = 6378245.0, ee = 0.00669342162296594323;
+  function tLat(x, y) { var r = -100 + 2*x + 3*y + 0.2*y*y + 0.1*x*y + 0.2*Math.sqrt(Math.abs(x));
+    r += (20*Math.sin(6*x*Math.PI) + 20*Math.sin(2*x*Math.PI)) * 2/3;
+    r += (20*Math.sin(y*Math.PI) + 40*Math.sin(y/3*Math.PI)) * 2/3;
+    r += (160*Math.sin(y/12*Math.PI) + 320*Math.sin(y*Math.PI/30)) * 2/3; return r; }
+  function tLon(x, y) { var r = 300 + x + 2*y + 0.1*x*x + 0.1*x*y + 0.1*Math.sqrt(Math.abs(x));
+    r += (20*Math.sin(6*x*Math.PI) + 20*Math.sin(2*x*Math.PI)) * 2/3;
+    r += (20*Math.sin(x*Math.PI) + 40*Math.sin(x/3*Math.PI)) * 2/3;
+    r += (150*Math.sin(x/12*Math.PI) + 300*Math.sin(x/30*Math.PI)) * 2/3; return r; }
+  var dLat = tLat(lon - 105, lat - 35), dLon = tLon(lon - 105, lat - 35);
+  var radLat = lat / 180 * Math.PI, magic = Math.sin(radLat);
+  magic = 1 - ee * magic * magic;
+  var sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
+  dLon = (dLon * 180) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
+  return [lat + dLat, lon + dLon];
+}
+var SOURCES = {
+  'gaode':      { url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', sub: '1234', max: 18, attr: '高德地图', note: '高德地图 · GCJ-02 坐标已纠偏', fallback: null },
+  'google':     { url: 'https://mt{s}.google.com/vt/lyrs=m&hl=zh-CN&x={x}&y={y}&z={z}', sub: '0123', max: 20, attr: 'Google 地图', note: 'Google 地图（查代理 IP / VPN 在线时可用）', fallback: 'gaode' },
+  'esri':       { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr: 'Esri 卫星', note: 'Esri World Imagery', fallback: 'gaode' },
+  'esri-street':{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attr: 'Esri 街道', note: 'Esri World Street Map', fallback: 'gaode' },
+  'carto':      { url: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', max: 19, attr: 'CARTO', note: 'CARTO Voyager（OSM 数据）', fallback: 'gaode' }
+};
+var map = L.map('map', { zoomControl: true, attributionControl: false }).setView([39.9, 116.4], 11);
+var layers = {}, cur = null, curKey = null;
+/* URL ?src= 指定初始源（不存在该键则用默认高德） */
+var initSrc = new URLSearchParams(location.search).get('src');
+var tileOk = false, loadProbe = null;
+function armFallback(key) {
+  clearTimeout(loadProbe);
+  tileOk = false;
+  var s = SOURCES[key];
+  if (!s || !s.fallback) return;
+  loadProbe = setTimeout(function(){
+    if (!tileOk && curKey === key && SOURCES[key] && SOURCES[key].fallback) {
+      var fb = SOURCES[key].fallback;
+      var failed = SOURCES[key].attr;
+      setSource(fb);
+      document.getElementById('mapNote').textContent = failed + ' 加载失败，已切换到 ' + SOURCES[fb].attr;
+    }
+  }, 6000);
+}
+/* 记录最近一次收到的 WGS-84 坐标，切源后按新坐标系重放标记 */
+var lastWgs = null;
+function placeMarker() {
+  if (!lastWgs) return;
+  var ll = (curKey === 'gaode') ? wgs2gcj(lastWgs[0], lastWgs[1]) : lastWgs;
+  if (window._ipMarker) map.removeLayer(window._ipMarker);
+  window._ipMarker = L.marker(ll).addTo(map).bindPopup(lastLabel).openPopup();
+}
+function setSource(key) {
+  if (key === curKey) return;
+  if (cur) map.removeLayer(cur);
+  var s = SOURCES[key];
+  if (!layers[key]) {
+    layers[key] = L.tileLayer(s.url, { subdomains: s.sub || 'abc', maxZoom: s.max || 18 });
+    layers[key].on('tileload', function(){ tileOk = true; });
+  }
+  cur = layers[key]; curKey = key; cur.addTo(map);
+  document.querySelectorAll('#mnav button').forEach(function(b){ b.classList.toggle('active', b.dataset.src === key); });
+  document.getElementById('mapNote').textContent = s.note;
+  placeMarker();
+  armFallback(key);
+}
+document.querySelectorAll('#mnav button').forEach(function(b){
+  b.addEventListener('click', function(){ setSource(b.dataset.src); });
+});
+setSource(SOURCES[initSrc] ? initSrc : 'gaode');
+/* 接收宿主页消息：set-ip 定位 / set-src 切换瓦片源（lat/lon 为 WGS-84，高德源自动纠偏为 GCJ-02） */
+window.addEventListener('message', function(ev) {
+  try {
+    var d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+    if (!d) return;
+    if (d.type === 'set-src' && SOURCES[d.src]) { setSource(d.src); return; }
+    if (d.type !== 'set-ip') return;
+    var lat = parseFloat(d.lat), lon = parseFloat(d.lon);
+    if (!isFinite(lat) || !isFinite(lon)) return;
+    lastWgs = [lat, lon];
+    lastLabel = d.label || ('IP 位置 ' + lat.toFixed(4) + ', ' + lon.toFixed(4));
+    var ll = (curKey === 'gaode') ? wgs2gcj(lat, lon) : [lat, lon];
+    map.setView(ll, 13);
+    placeMarker();
+  } catch (e) {}
+});
+/* 兜底：postMessage 不可用时读 URL 参数 */
+var lastLabel = '';
+var qs = new URLSearchParams(location.search);
+if (qs.get('lat') && qs.get('lon')) {
+  var lat = parseFloat(qs.get('lat')), lon = parseFloat(qs.get('lon'));
+  if (isFinite(lat) && isFinite(lon)) {
+    lastWgs = [lat, lon];
+    lastLabel = qs.get('label') || ('IP 位置 ' + lat.toFixed(4) + ', ' + lon.toFixed(4));
+    var ll2 = (curKey === 'gaode') ? wgs2gcj(lat, lon) : [lat, lon];
+    map.setView(ll2, 13);
+    placeMarker();
+  }
+}
+</script>
+</body>
+</html>

@@ -306,28 +306,53 @@ function startClock(offsetSec) {
 }
 
 /* ---------------- 地图 ---------------- */
+/* 本地 Leaflet 地图页（map.html）：瓦片源直连实测可用（OSM/天地图被墙或不允许 iframe，v1.6 移除） */
+let mapReady = false;
+let mapPending = false;
+
+function mapFrameUrl() {
+  const lat = state.info && typeof state.info.lat === 'number' ? state.info.lat : 0;
+  const lon = state.info && typeof state.info.lon === 'number' ? state.info.lon : 0;
+  return 'map.html?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon) +
+    '&label=' + encodeURIComponent('IP 位置 ' + lat.toFixed(4) + ', ' + lon.toFixed(4));
+}
+
+function postIpToMap() {
+  const lat = state.info && typeof state.info.lat === 'number' ? state.info.lat : 0;
+  const lon = state.info && typeof state.info.lon === 'number' ? state.info.lon : 0;
+  const frame = $('mapFrame');
+  try {
+    frame.contentWindow.postMessage(JSON.stringify({
+      type: 'set-ip', lat: lat, lon: lon,
+      label: 'IP 位置 ' + lat.toFixed(4) + ', ' + lon.toFixed(4)
+    }), '*');
+  } catch (e) {}
+}
+
 function renderMap() {
   const lat = state.info && typeof state.info.lat === 'number' ? state.info.lat : 0;
   const lon = state.info && typeof state.info.lon === 'number' ? state.info.lon : 0;
   $('mapCoords').textContent = lat.toFixed(4) + ', ' + lon.toFixed(4);
-  const active = document.querySelector('.mtab.active');
-  const src = active ? active.dataset.src : 'osm';
-  let url = '';
-  if (src === 'osm') {
-    url = `https://www.openstreetmap.org/export/embed.html?bbox=${lon - 1.2}%2C${lat - 1.2}%2C${lon + 1.2}%2C${lat + 1.2}&layer=mapnik&marker=${lat}%2C${lon}`;
-  } else if (src === 'amt') {
-    url = `https://uri.amap.com/marker?position=${lon.toFixed(5)},${lat.toFixed(5)}&name=IP归属&src=ipcheck&coordinate=gaode&callnative=0`;
-  } else if (src === 'gdi') {
-    url = `https://www.tianditu.gov.cn/browser/map.html?lat=${lat}&lng=${lon}`;
+  const frame = $('mapFrame');
+  if (!mapReady) {
+    mapPending = true;
+    frame.src = mapFrameUrl();
+    return;
   }
-  $('mapFrame').src = url;
+  postIpToMap();
 }
 
-// 地图源切换
+$('mapFrame').addEventListener('load', function () {
+  mapReady = true;
+  if (mapPending) { mapPending = false; postIpToMap(); }
+});
+
+// 地图源切换：tab 只是把选择传给地图页内部，由 map.html 重建瓦片层
 document.querySelectorAll('.mtab').forEach(b => b.addEventListener('click', function () {
   document.querySelectorAll('.mtab').forEach(x => x.classList.remove('active'));
   this.classList.add('active');
-  renderMap();
+  const frame = $('mapFrame');
+  try { frame.contentWindow.postMessage(JSON.stringify({ type: 'set-src', src: this.dataset.src }), '*'); } catch (e) {}
 }));
 
 /* ---------------- 纯净度渲染 ---------------- */
